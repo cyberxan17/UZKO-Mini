@@ -185,9 +185,12 @@ export type ReturnReceipt = {
   id: string;
   date: string;
   cashier: string;
-  customerType: "oddiy" | "nasiya";
+  customerType: "oddiy" | "nasiya" | "agent";
   customerId?: string;
   customerName: string;
+  agentId?: string;
+  agentName?: string;
+  agentPhone?: string;
   objectId?: string;
   objectName?: string;
   items: ReceiptItem[];
@@ -1579,6 +1582,7 @@ export type SupplierReport = {
   id: string;
   date: string;
   addedBy: string;
+  type?: "receipt" | "return";
   agentId: string;
   agentName: string;
   agentPhone: string;
@@ -1600,6 +1604,7 @@ export type ProductHistory = {
   price: number;
   costPrice: number;
   warehouse: string;
+  shelfLocation?: string;
   agentName?: string;
   agentId?: string;
   agentPhone?: string;

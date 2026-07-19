@@ -31,6 +31,7 @@ import {
   MOCK_PRODUCTS,
   MOCK_CREDIT_CUSTOMERS,
   MOCK_RECEIPTS,
+  MOCK_SUPPLIER_REPORTS,
   MOCK_RETURN_RECEIPTS,
   MOCK_WITHDRAWALS,
   formatSom,
@@ -39,7 +40,12 @@ import {
   type Receipt,
   type ReturnReceipt,
 } from "@/lib/mock-data";
-import { applyDebtReturn, dispatchReceiptMessage, fullCustomerName } from "@/lib/data-actions";
+import {
+  applyDebtReturn,
+  dispatchReceiptMessage,
+  fullCustomerName,
+  recordSupplierReturn,
+} from "@/lib/data-actions";
 import { toast } from "sonner";
 
 type ReturnCartItem = {
@@ -49,7 +55,7 @@ type ReturnCartItem = {
   note?: string;
 };
 
-type CustomerType = "oddiy" | "nasiya";
+type CustomerType = "oddiy" | "nasiya" | "agent";
 
 export const PENDING_RETURN_EXCHANGE_KEY = "uzko_pending_return_exchange";
 
@@ -60,6 +66,9 @@ export type PendingReturnExchange = {
   customerType: CustomerType;
   customerId?: string;
   customerName: string;
+  agentId?: string;
+  agentName?: string;
+  agentPhone?: string;
   subtotal: number;
   total: number;
   reason: string;
@@ -100,6 +109,7 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
   const [customerType, setCustomerType] = React.useState<CustomerType>("oddiy");
   const [customerSearch, setCustomerSearch] = React.useState("");
   const [customerId, setCustomerId] = React.useState("");
+  const [agentId, setAgentId] = React.useState("");
 
   const matches = React.useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -113,6 +123,8 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
   }, [query]);
 
   const customer = MOCK_CREDIT_CUSTOMERS.find((c) => c.id === customerId);
+  const supplierAgents = buildSupplierAgentOptions(MOCK_SUPPLIER_REPORTS);
+  const selectedAgent = supplierAgents.find((agent) => agent.id === agentId);
   const originalReceipt = React.useMemo(() => findReceipt(receiptNumber), [receiptNumber]);
   const lineTotal = (item: ReturnCartItem) => salePrice(item.product) * safeNumber(item.qty);
   const subtotal = cart.reduce((sum, item) => sum + lineTotal(item), 0);
@@ -164,6 +176,16 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
     );
   };
 
+  React.useEffect(() => {
+    if (customerType !== "nasiya") {
+      setCustomerSearch("");
+      setCustomerId("");
+    }
+    if (customerType !== "agent") {
+      setAgentId("");
+    }
+  }, [customerType]);
+
   const resetFinishCustomer = () => {
     if (originalReceipt?.customerType === "nasiya") {
       const receiptCustomer = MOCK_CREDIT_CUSTOMERS.find(
@@ -172,11 +194,23 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
       setCustomerType("nasiya");
       setCustomerId(receiptCustomer?.id ?? "");
       setCustomerSearch(receiptCustomer ? fullCustomerName(receiptCustomer) : "");
+      setAgentId("");
       return;
     }
-    setCustomerType("oddiy");
+    if (customerType === "nasiya") {
+      setCustomerSearch("");
+      setCustomerId("");
+      setAgentId("");
+      return;
+    }
+    if (customerType === "agent") {
+      setCustomerSearch("");
+      setCustomerId("");
+      return;
+    }
     setCustomerSearch("");
     setCustomerId("");
+    setAgentId("");
   };
 
   const openFinish = () => {
@@ -198,18 +232,29 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
       originalReceipt?.customerType === "nasiya" && originalReceipt.customerId
         ? MOCK_CREDIT_CUSTOMERS.find((item) => item.id === originalReceipt.customerId)
         : undefined;
-    const effectiveCustomerType = originalReceipt?.customerType ?? customerType;
+    const effectiveCustomerType =
+      customerType === "agent" ? "agent" : originalReceipt?.customerType ?? customerType;
     const effectiveCustomer =
       effectiveCustomerType === "nasiya" ? originalReceiptCustomer ?? customer : undefined;
+    const effectiveAgent =
+      effectiveCustomerType === "agent"
+        ? selectedAgent ?? supplierAgents.find((item) => item.id === agentId)
+        : undefined;
     if (effectiveCustomerType === "nasiya" && !effectiveCustomer) {
       toast.error("Nasiyachi mijoz topilmadi");
       return null;
     }
+    if (effectiveCustomerType === "agent" && !effectiveAgent) {
+      toast.error("Agent tanlang");
+      return null;
+    }
     const receiptCustomerName =
-      originalReceipt?.customerName ||
-      (effectiveCustomer?.firstName && effectiveCustomer?.lastName
-        ? `${effectiveCustomer.firstName} ${effectiveCustomer.lastName}`
-        : "Oddiy mijoz");
+      effectiveCustomerType === "agent"
+        ? effectiveAgent?.name ?? "Taminotchi"
+        : originalReceipt?.customerName ||
+          (effectiveCustomer?.firstName && effectiveCustomer?.lastName
+            ? `${effectiveCustomer.firstName} ${effectiveCustomer.lastName}`
+            : "Oddiy mijoz");
     return {
       id: `pending-return-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -217,6 +262,9 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
       customerType: effectiveCustomerType,
       customerId: effectiveCustomer?.id,
       customerName: receiptCustomerName,
+      agentId: effectiveAgent?.id,
+      agentName: effectiveAgent?.name,
+      agentPhone: effectiveAgent?.phone,
       items: cart.map((item) => ({
         productId: item.product.id,
         name: item.product.name,
@@ -641,19 +689,21 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
       </Dialog>
 
       <Dialog open={finishOpen} onOpenChange={setFinishOpen}>
-        <DialogContent className="sm:max-w-[560px]">
+        <DialogContent className="sm:max-w-[920px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <UserRound className="h-5 w-5" /> Qaytarishni yakunlash
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 md:grid-cols-3">
               <button
                 type="button"
                 onClick={() => {
                   setCustomerType("oddiy");
                   setCustomerId("");
+                  setCustomerSearch("");
+                  setAgentId("");
                 }}
                 className={`rounded-xl border p-4 text-left transition hover:bg-muted ${customerType === "oddiy" ? "border-primary bg-primary/5" : ""}`}
               >
@@ -664,12 +714,29 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
               </button>
               <button
                 type="button"
-                onClick={() => setCustomerType("nasiya")}
+                onClick={() => {
+                  setCustomerType("nasiya");
+                  setAgentId("");
+                }}
                 className={`rounded-xl border p-4 text-left transition hover:bg-muted ${customerType === "nasiya" ? "border-primary bg-primary/5" : ""}`}
               >
                 <b>Nasiyachi</b>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Kassadan chiqim bo'lmaydi, mijozning umumiy qarzidan minus qilinadi.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomerType("agent");
+                  setCustomerId("");
+                  setCustomerSearch("");
+                }}
+                className={`rounded-xl border p-4 text-left transition hover:bg-muted ${customerType === "agent" ? "border-primary bg-primary/5" : ""}`}
+              >
+                <b>Agent / taminotchi</b>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Tovar agentga qaytariladi, qaytarish agent hisob-kitobiga yoziladi.
                 </p>
               </button>
             </div>
@@ -693,6 +760,47 @@ export function TovarQaytarish({ exchangeShortcut = false, onExchangeCreated }: 
                   placeholder="Dilshod, c3 yoki +998..."
                   compact
                 />
+              </div>
+            )}
+
+            {customerType === "agent" && (
+              <div className="rounded-xl border bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="mb-1 block text-xs font-semibold">Agent / taminotchi tanlash</Label>
+                  <span className="text-[11px] text-muted-foreground">
+                    {supplierAgents.length} ta yozuv
+                  </span>
+                </div>
+                <Select value={agentId} onValueChange={setAgentId}>
+                  <SelectTrigger className="h-10">
+                    <SelectValue placeholder="Agentni ro'yxatdan tanlang" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {supplierAgents.map((agent) => (
+                      <SelectItem key={agent.id} value={agent.id}>
+                        <div className="flex flex-col py-0.5">
+                          <span className="font-semibold">
+                            {agent.id} — {agent.name}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {agent.phone || "Raqam yo'q"} · Qoldiq: {formatSom(agent.remainingDebt)}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedAgent && (
+                  <div className="mt-2 rounded-md bg-background p-2 text-xs text-muted-foreground">
+                    Bot: {selectedAgent.botEnabled ? "yoqilgan" : "o'chirilgan"} · Qoldiq:{" "}
+                    {formatSom(selectedAgent.remainingDebt)}
+                  </div>
+                )}
+                {supplierAgents.length === 0 && (
+                  <div className="mt-2 text-xs text-destructive">
+                    Agent topilmadi. Avval agentlar ro'yxatini to'ldiring.
+                  </div>
+                )}
               </div>
             )}
 
@@ -724,6 +832,12 @@ export function finalizePendingReturnExchange(pendingReturn: PendingReturnExchan
     pendingReturn.customerType === "nasiya" && pendingReturn.customerId
       ? MOCK_CREDIT_CUSTOMERS.find((item) => item.id === pendingReturn.customerId)
       : undefined;
+  const agent =
+    pendingReturn.customerType === "agent" && pendingReturn.agentId
+      ? buildSupplierAgentOptions(MOCK_SUPPLIER_REPORTS).find(
+          (item) => item.id === pendingReturn.agentId,
+        )
+      : undefined;
 
   if (pendingReturn.customerType === "oddiy") {
     cashWithdrawalId = `CH-QT-${Date.now()}`;
@@ -752,6 +866,21 @@ export function finalizePendingReturnExchange(pendingReturn: PendingReturnExchan
       amount: -pendingReturn.total,
       note: pendingReturn.reason,
     });
+  } else if (agent) {
+    recordSupplierReturn({
+      cashier: pendingReturn.cashier,
+      agentId: agent.id,
+      agentName: agent.name,
+      agentPhone: agent.phone,
+      totalAmount: pendingReturn.total,
+      note: pendingReturn.reason,
+      items: pendingReturn.items.map((item) => ({
+        productName: item.name,
+        qty: item.qty,
+        unit: item.unit,
+        amount: item.price * item.qty,
+      })),
+    });
   }
 
   const receipt: ReturnReceipt = {
@@ -761,6 +890,9 @@ export function finalizePendingReturnExchange(pendingReturn: PendingReturnExchan
     customerType: pendingReturn.customerType,
     customerId: pendingReturn.customerId,
     customerName: pendingReturn.customerName,
+    agentId: pendingReturn.agentId,
+    agentName: pendingReturn.agentName,
+    agentPhone: pendingReturn.agentPhone,
     items: pendingReturn.items,
     subtotal: pendingReturn.subtotal,
     total: pendingReturn.total,
@@ -768,7 +900,7 @@ export function finalizePendingReturnExchange(pendingReturn: PendingReturnExchan
     cashWithdrawalId,
   };
   MOCK_RETURN_RECEIPTS.unshift(receipt);
-  dispatchReturnReceipt(receipt, findReceipt(pendingReturn.receiptNumber ?? ""), customer);
+  dispatchReturnReceipt(receipt, findReceipt(pendingReturn.receiptNumber ?? ""), customer, agent);
   return receipt;
 }
 
@@ -824,11 +956,56 @@ function fullCustomerNameById(customerId: string) {
   return customer ? fullCustomerName(customer) : customerId;
 }
 
+function buildSupplierAgentOptions(reports: typeof MOCK_SUPPLIER_REPORTS) {
+  const map = new Map<
+    string,
+    { id: string; name: string; phone?: string; botEnabled: boolean; remainingDebt: number }
+  >();
+
+  reports.forEach((report) => {
+    if (!report.agentId) return;
+    const current = map.get(report.agentId) ?? {
+      id: report.agentId,
+      name: report.agentName || "Nomsiz agent",
+      phone: report.agentPhone,
+      botEnabled: false,
+      remainingDebt: 0,
+    };
+    current.botEnabled = current.botEnabled || Boolean(report.botEnabled);
+    current.remainingDebt += report.remainingDebt ?? 0;
+    if (!current.phone && report.agentPhone) current.phone = report.agentPhone;
+    map.set(report.agentId, current);
+  });
+
+  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function dispatchReturnReceipt(
   receipt: ReturnReceipt,
   originalReceipt: Receipt | undefined,
   customer: CreditCustomer | undefined,
+  agent?: { id: string; name: string; phone?: string; botEnabled?: boolean } | undefined,
 ) {
+  if (receipt.customerType === "agent") {
+    const target =
+      agent ??
+      (receipt.agentId
+        ? buildSupplierAgentOptions(MOCK_SUPPLIER_REPORTS).find((item) => item.id === receipt.agentId)
+        : undefined);
+    if (!target?.botEnabled) return;
+    dispatchReceiptMessage({
+      recipientCategory: "agent",
+      recipientId: target.id,
+      recipientName: target.name,
+      phone: target.phone,
+      receiptId: receipt.id,
+      title: "Taminotchiga qaytarish cheki",
+      total: receipt.total,
+      note: receipt.reason,
+    });
+    return;
+  }
+
   if (receipt.customerType === "nasiya") {
     const target = customer ?? MOCK_CREDIT_CUSTOMERS.find((item) => item.id === receipt.customerId);
     if (!target?.botEnabled) return;

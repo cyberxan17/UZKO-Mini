@@ -323,6 +323,39 @@ export function dispatchSupplierReceipt(input: {
   });
 }
 
+export function recordSupplierReturn(input: {
+  cashier?: string;
+  agentId: string;
+  agentName: string;
+  agentPhone?: string;
+  items: { productName: string; qty: number; unit: string; amount: number }[];
+  totalAmount: number;
+  note?: string;
+}) {
+  const botEnabled = MOCK_SUPPLIER_REPORTS.some(
+    (report) => report.agentId === input.agentId && Boolean(report.botEnabled),
+  );
+
+  const report: SupplierReport = {
+    id: `sr-return-${Date.now()}`,
+    date: new Date().toISOString(),
+    addedBy: input.cashier ?? "Joriy foydalanuvchi",
+    type: "return",
+    agentId: input.agentId,
+    agentName: input.agentName,
+    agentPhone: input.agentPhone ?? "",
+    botEnabled,
+    items: input.items,
+    totalAmount: -Math.abs(input.totalAmount),
+    paidAmount: 0,
+    remainingDebt: -Math.abs(input.totalAmount),
+    note: `Tovar qaytarish${input.note?.trim() ? ` · ${input.note.trim()}` : ""}`,
+  };
+
+  MOCK_SUPPLIER_REPORTS.unshift(report);
+  return report;
+}
+
 export function dispatchReceiptMessage(input: {
   recipientCategory: ReceiptDispatchLog["recipientCategory"];
   recipientId?: string;

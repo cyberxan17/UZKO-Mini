@@ -1,8 +1,9 @@
 import * as React from "react";
-import * as XLSX from "xlsx";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -12,22 +13,15 @@ import {
 } from "@/components/ui/select";
 import {
   Barcode,
-  ImagePlus,
-  Search,
   Plus,
   Minus,
   Check,
-  FileSpreadsheet,
-  Upload,
-  Truck,
-  PackageCheck,
 } from "lucide-react";
 import {
   MOCK_PRODUCTS,
   MOCK_RATES,
   MOCK_PRODUCT_HISTORY,
   MOCK_SUPPLIER_REPORTS,
-  MOCK_RECEIPT_DISPATCHES,
   formatSom,
   costInSom,
 } from "@/lib/mock-data";
@@ -37,15 +31,6 @@ import { useApp } from "@/lib/app-context";
 import { dispatchSupplierReceipt } from "@/lib/data-actions";
 import type { ProductCreateMode } from "@/routes/tovarlar";
 import { formatNumberInput, parseNumberInput } from "@/lib/utils";
-
-type ImportProductRow = {
-  name: string;
-  price: number;
-  costPrice: number;
-  qty: number;
-  unit: string;
-  warehouse: string;
-};
 
 type NewProductRow = {
   id: string;
@@ -58,6 +43,7 @@ type NewProductRow = {
   price: string;
   wholesalePrice: string;
   unit: string;
+  warehouse: string;
   shelfLocation: string;
 };
 
@@ -71,7 +57,7 @@ type SupplierSource = {
   sendBotUpdate: boolean;
 };
 
-const makeNewProductRow = (unit = "dona"): NewProductRow => ({
+const makeNewProductRow = (unit = "dona", warehouse = "Asosiy ombor"): NewProductRow => ({
   id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   name: "",
   barcode: "",
@@ -81,22 +67,9 @@ const makeNewProductRow = (unit = "dona"): NewProductRow => ({
   price: "",
   wholesalePrice: "",
   unit,
+  warehouse,
   shelfLocation: "",
 });
-
-function readCell(row: Record<string, unknown>, keys: string[]) {
-  const normalized = new Map(
-    Object.entries(row).map(([key, value]) => [
-      key.trim().toLowerCase().replace(/\s+/g, " "),
-      value,
-    ]),
-  );
-  for (const key of keys) {
-    const value = normalized.get(key.trim().toLowerCase().replace(/\s+/g, " "));
-    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
-  }
-  return "";
-}
 
 function toNumber(value: unknown) {
   const cleaned = String(value ?? "")
@@ -257,13 +230,14 @@ function recordProductAddition(input: {
   }
 }
 
-export function TovarQoshish({ mode, onDone }: { mode: ProductCreateMode; onDone: () => void }) {
+export function TovarQoshish({ onDone }: { mode: ProductCreateMode; onDone: () => void }) {
   return <CreateNew onDone={onDone} />;
 }
 
 function CreateNew({ onDone }: { onDone: () => void }) {
-  const { settings, t } = useApp();
-  const [warehouse, setWarehouse] = React.useState(settings.warehouses[0] ?? "Asosiy ombor");
+  const { settings } = useApp();
+  const defaultWarehouse = settings.warehouses[0] ?? "Asosiy ombor";
+  const agents = getAgents();
   const [source, setSource] = React.useState<SupplierSource>({
     enabled: false,
     agentId: makeAgentId(),
@@ -274,26 +248,14 @@ function CreateNew({ onDone }: { onDone: () => void }) {
     sendBotUpdate: true,
   });
   const [rows, setRows] = React.useState<NewProductRow[]>(() => [
-    makeNewProductRow(settings.units[0] ?? "dona"),
+    makeNewProductRow(settings.units[0] ?? "dona", defaultWarehouse),
   ]);
-  const [agentSearch, setAgentSearch] = React.useState("");
-  const [imageName, setImageName] = React.useState("");
-  const imageInputRef = React.useRef<HTMLInputElement | null>(null);
-  const agents = React.useMemo(() => getAgents(), [source.enabled]);
-
-  const matchedAgents = React.useMemo(() => {
-    const q = agentSearch.trim().toLowerCase();
-    if (!q) return agents;
-    return agents.filter((agent) =>
-      `${agent.id} ${agent.name} ${agent.phone}`.toLowerCase().includes(q),
-    );
-  }, [agentSearch, agents]);
-
-  const pickedAgent =
-    source.enabled && source.agentId
-      ? agents.find((agent) => agent.id === source.agentId)
-      : undefined;
-  const showAgentForm = Boolean(source.agentId || source.agentName.trim());
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [deductFromCashbox, setDeductFromCashbox] = React.useState(true);
+  const selectedAgent = React.useMemo(
+    () => agents.find((agent) => agent.id === source.agentId),
+    [agents, source.agentId],
+  );
 
   const productSuggestionsFor = (row: NewProductRow) => {
     const q = normalizeSearchValue(row.name);
@@ -308,28 +270,11 @@ function CreateNew({ onDone }: { onDone: () => void }) {
   };
 
   const addRow = () => {
-    setRows((current) => [...current, makeNewProductRow(settings.units[0] ?? "dona")]);
+    setRows((current) => [...current, makeNewProductRow(settings.units[0] ?? "dona", defaultWarehouse)]);
   };
 
   const removeRow = (id: string) => {
     setRows((current) => (current.length > 1 ? current.filter((row) => row.id !== id) : current));
-  };
-
-  const toggleSource = () => {
-    setSource((current) =>
-      current.enabled
-        ? { ...current, enabled: false }
-        : {
-            ...current,
-            enabled: true,
-            agentId: "",
-            agentName: "",
-            agentPhone: "",
-            paidAmount: current.paidAmount || "0",
-            sendBotUpdate: current.sendBotUpdate,
-          },
-    );
-    setAgentSearch("");
   };
 
   const assignBarcode = (id: string) => {
@@ -348,23 +293,9 @@ function CreateNew({ onDone }: { onDone: () => void }) {
     updateRow(id, { barcode: `${current.trim()} | ` });
   };
 
-  const selectAgent = (agent: NonNullable<typeof pickedAgent>) => {
-    setSource({
-      ...source,
-      enabled: true,
-      agentId: agent.id,
-      agentName: agent.name,
-      agentPhone: agent.phone,
-      paidAmount: source.paidAmount || "0",
-      sendBotUpdate: agent.botEnabled,
-      note: source.note,
-    });
-    setAgentSearch(`${agent.id} ${agent.name}`);
-  };
-
   const selectExistingProduct = (rowId: string, product: Product) => {
-    const sourceInfo = latestProductSource(product.name);
     const currency = product.costCurrency;
+    const sourceInfo = latestProductSource(product.name);
     updateRow(rowId, {
       existingProductId: product.id,
       name: product.name,
@@ -374,22 +305,20 @@ function CreateNew({ onDone }: { onDone: () => void }) {
       price: somToMoneyInput(product.price, currency),
       wholesalePrice: somToMoneyInput(product.wholesalePrice, currency),
       unit: product.unit,
-      shelfLocation: "",
+      warehouse: settings.warehouses.includes(product.warehouse) ? product.warehouse : defaultWarehouse,
+      shelfLocation: product.shelfLocation ?? "",
     });
-    if (settings.warehouses.includes(product.warehouse)) setWarehouse(product.warehouse);
     if (sourceInfo?.agentName) {
-      setSource((current) => ({
-        ...current,
+      setSource({
         enabled: true,
-        agentId: sourceInfo.agentId || current.agentId || makeAgentId(),
-        agentName: sourceInfo.agentName ?? "",
-        agentPhone: sourceInfo.agentPhone ?? "",
-        paidAmount: current.paidAmount || "0",
-        note: sourceInfo.note ?? current.note,
-      }));
-      setAgentSearch(
-        `${sourceInfo.agentId ? `${sourceInfo.agentId} ` : ""}${sourceInfo.agentName}`.trim(),
-      );
+        agentId: sourceInfo.agentId || makeAgentId(),
+        agentName: sourceInfo.agentName,
+        agentPhone: sourceInfo.agentPhone || "",
+        paidAmount: source.paidAmount || "0",
+        note: sourceInfo.note || "",
+        sendBotUpdate: true,
+      });
+      setConfirmOpen(true);
     }
     toast.success("Bazadagi mahsulot tanlandi", {
       description: product.name,
@@ -400,10 +329,10 @@ function CreateNew({ onDone }: { onDone: () => void }) {
     .map((row) => ({
       ...row,
       name: row.name.trim(),
+      warehouseValue: row.warehouse.trim() || defaultWarehouse,
+      shelfLocationValue: row.shelfLocation.trim(),
       qtyNumber: Math.max(0, parseNumberInput(row.qty) || 0),
       costNumber: Math.max(0, parseNumberInput(row.costPrice) || 0),
-      priceNumber: Math.max(0, parseNumberInput(row.price) || 0),
-      wholesalePriceNumber: Math.max(0, parseNumberInput(row.wholesalePrice) || 0),
       priceSom: moneyInputToSom(row.price, row.costCurrency),
       wholesalePriceSom: moneyInputToSom(row.wholesalePrice, row.costCurrency),
       unitValue: (row.unit.trim() || settings.units[0]) ?? "dona",
@@ -415,14 +344,31 @@ function CreateNew({ onDone }: { onDone: () => void }) {
     (sum, row) => sum + row.qtyNumber * row.costNumber * (MOCK_RATES[row.costCurrency] ?? 1),
     0,
   );
-  const submit = () => {
+  const openConfirm = () => {
     if (validRows.length === 0) return toast.error("Kamida bitta tovar nomi va sonini kiriting");
-    if (source.enabled && !source.agentName.trim()) return toast.error("Agent ismini kiriting");
+    if (!source.enabled) {
+      setSource({
+        enabled: false,
+        agentId: makeAgentId(),
+        agentName: "",
+        agentPhone: "",
+        paidAmount: "0",
+        note: "",
+        sendBotUpdate: true,
+      });
+    }
+    setConfirmOpen(true);
+  };
 
+  const finalizeReceiving = () => {
     const totalPaid = Math.max(0, parseNumberInput(source.paidAmount) || 0);
-    const usedBarcodes = new Set(
-      MOCK_PRODUCTS.flatMap((product) => splitBarcodes(product.barcode)),
-    );
+    const sourceEnabled = Boolean(source.enabled && source.agentName.trim());
+    if (source.enabled && !source.agentName.trim()) {
+      toast.error("Agent ismini kiriting yoki hech qisi yo'q deb belgilang");
+      return;
+    }
+
+    const usedBarcodes = new Set(MOCK_PRODUCTS.flatMap((product) => splitBarcodes(product.barcode)));
     rows.forEach((row) => {
       splitBarcodes(row.barcode).forEach((barcode) => usedBarcodes.add(barcode));
     });
@@ -435,6 +381,7 @@ function CreateNew({ onDone }: { onDone: () => void }) {
       const existingProduct = row.existingProductId
         ? MOCK_PRODUCTS.find((product) => product.id === row.existingProductId)
         : undefined;
+      const rowWarehouse = row.warehouseValue || defaultWarehouse;
       const newProd: Product = existingProduct ?? {
         id: `p${Date.now()}-${index}`,
         name: row.name,
@@ -445,7 +392,7 @@ function CreateNew({ onDone }: { onDone: () => void }) {
         barcode,
         customCode: makeProductCode(row.name),
         unit: row.unitValue,
-        warehouse,
+        warehouse: rowWarehouse,
         shelfLocation: "",
         vitrinaQty: 0,
         omborQty: 0,
@@ -458,14 +405,14 @@ function CreateNew({ onDone }: { onDone: () => void }) {
       newProd.costCurrency = row.costCurrency;
       newProd.barcode = barcode;
       newProd.unit = row.unitValue;
-      newProd.warehouse = warehouse;
-      newProd.shelfLocation = "";
+      newProd.warehouse = rowWarehouse;
+      newProd.shelfLocation = row.shelfLocationValue;
       newProd.omborQty += row.qtyNumber;
       if (!existingProduct) MOCK_PRODUCTS.push(newProd);
 
       const rowCostSom = row.qtyNumber * row.costNumber * (MOCK_RATES[row.costCurrency] ?? 1);
       const paidShare =
-        source.enabled && totalCostSom > 0
+        sourceEnabled && totalCostSom > 0
           ? Math.round((totalPaid * rowCostSom) / totalCostSom)
           : 0;
 
@@ -476,19 +423,28 @@ function CreateNew({ onDone }: { onDone: () => void }) {
         price: newProd.price,
         costPrice: costInSom(newProd),
         warehouse: newProd.warehouse,
+        shelfLocation: newProd.shelfLocation,
         addedBy: settings.username,
-        source: source.enabled
+        source: sourceEnabled
           ? {
               ...source,
               paidAmount: String(paidShare),
               note: source.note,
             }
-          : source,
+          : {
+              enabled: false,
+              agentId: "",
+              agentName: "",
+              agentPhone: "",
+              paidAmount: "0",
+              note: "",
+              sendBotUpdate: false,
+            },
       });
     });
 
     if (
-      source.enabled &&
+      sourceEnabled &&
       source.sendBotUpdate &&
       source.agentPhone.trim() &&
       source.agentName.trim()
@@ -507,589 +463,483 @@ function CreateNew({ onDone }: { onDone: () => void }) {
       });
     }
 
+    setConfirmOpen(false);
     toast.success("Mahsulotlar qabul qilindi", {
-      description: `${validRows.length} xil mahsulot ${warehouse} omboriga qo'shildi`,
+      description: `${validRows.length} xil mahsulot qabul qilindi`,
     });
     onDone();
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
-      <section className="flex min-h-0 flex-col gap-3 overflow-y-auto rounded-lg border bg-card p-3 shadow-sm xl:order-1">
-        <div className="text-sm font-semibold">Qabul ma'lumotlari</div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => imageInputRef.current?.click()}
-            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/20 text-muted-foreground hover:bg-muted/40 transition-colors"
-            title="Rasm qo'shish"
-          >
-            <ImagePlus className="h-5 w-5 text-primary" />
-          </button>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[11px] font-medium text-muted-foreground">
-              {imageName || "Rasm tanlanmagan"}
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <section className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
+          <div>
+            <div className="text-sm font-semibold">Mahsulot qabul qilish</div>
+            <div className="text-[11px] text-muted-foreground">
+              Qatorlar ko'payganda faqat shu ro'yxat scroll qiladi.
             </div>
-            <div className="text-[10px] text-primary/70">PNG, JPG (max 2MB)</div>
           </div>
-          <input
-            ref={imageInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(event) => setImageName(event.target.files?.[0]?.name ?? "")}
-          />
-        </div>
-
-        <div className="rounded-lg border bg-muted/10 p-2 space-y-2">
-          <Label className="text-[11px] font-bold uppercase text-muted-foreground">
-            {t("shelf_location")} boshqaruvi
-          </Label>
-          <div className="flex gap-1.5">
-            <Input
-              placeholder="Polka raqami..."
-              className="h-8 text-xs"
-              disabled
-            />
-            <Button type="button" size="icon" className="h-8 w-8 shrink-0" disabled>
-              <Plus className="h-4 w-4" />
-            </Button>
-          </div>
-          <Select disabled>
-            <SelectTrigger className="h-8 text-xs bg-card">
-              <SelectValue placeholder={`Tanlanganlarga ${t("shelf_location").toLowerCase()}...`} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="NONE">— Tozalash —</SelectItem>
-              {settings.shelfLocations.map((loc) => (
-                <SelectItem key={loc} value={loc}>
-                  {loc}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-[10px] text-muted-foreground">
-            Bu bo'lim mahsulot qabul qilishda o'chirilgan.
-          </p>
-        </div>
-
-        <div>
-          <Label className="mb-1 block text-xs">Qaysi omborga qo'shiladi</Label>
-          <Select value={warehouse} onValueChange={setWarehouse}>
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {settings.warehouses.map((w) => (
-                <SelectItem key={w} value={w}>
-                  {w}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="rounded-lg border bg-muted/20 p-2.5">
-          <Button
-            type="button"
-            variant={source.enabled ? "default" : "outline"}
-            onClick={toggleSource}
-            className="h-8 w-full justify-start gap-2 text-xs"
-          >
-            <Truck className="h-4 w-4" />
-            Agentlar
-          </Button>
-
-          {source.enabled && (
-            <div className="mt-2 space-y-2">
-              <div className="flex gap-1.5">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={agentSearch}
-                    onChange={(event) => setAgentSearch(event.target.value)}
-                    placeholder="Agent qidirish..."
-                    className="h-8 pl-7 text-xs"
-                  />
-                </div>
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                Yangi agent qo'shish endi Mijozlar sahifasida amalga oshiriladi.
-              </div>
-
-              {matchedAgents.length > 0 && !source.agentName.trim() && !showAgentForm && (
-                <div className="max-h-28 space-y-1 overflow-y-auto rounded-md border bg-card p-1">
-                  {matchedAgents.map((agent) => (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() => selectAgent(agent)}
-                      className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
-                    >
-                      <span className="font-semibold">{agent.name}</span>
-                      <span className="ml-1 text-muted-foreground">{agent.id}</span>
-                      <div className="text-[11px] text-muted-foreground">
-                        Qoldiq: {formatSom(agent.remainingDebt)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {showAgentForm && (
-                <div className="space-y-2">
-                  {pickedAgent && (
-                    <div className="grid grid-cols-2 gap-1.5 rounded-md border bg-card p-2 text-xs">
-                      <Info label="Joriy qarzimiz" value={formatSom(pickedAgent.totalAmount)} />
-                      <Info label="To'laganimiz" value={formatSom(pickedAgent.paidAmount)} />
-                      <Info label="Qoldiq" value={formatSom(pickedAgent.remainingDebt)} />
-                      <Info
-                        label="Hozir berilyapti"
-                        value={formatSom(Math.max(0, Number(source.paidAmount) || 0))}
-                      />
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label className="mb-1 block text-xs">Agent kodi</Label>
-                      <Input
-                        value={source.agentId}
-                        readOnly
-                        className="h-8 bg-muted text-xs font-semibold"
-                      />
-                    </div>
-                    <div>
-                      <Label className="mb-1 block text-xs">Agent ismi *</Label>
-                      <Input
-                        value={source.agentName}
-                        onChange={(e) => setSource({ ...source, agentName: e.target.value })}
-                        placeholder="Agent ismi"
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <Label className="mb-1 block text-xs">Telefon raqami</Label>
-                      <Input
-                        value={source.agentPhone}
-                        onChange={(e) => setSource({ ...source, agentPhone: e.target.value })}
-                        placeholder="+998..."
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="mb-1 block text-xs">Berilgan pul</Label>
-                    <Input
-                      type="number"
-                      value={source.paidAmount}
-                      onChange={(e) => setSource({ ...source, paidAmount: e.target.value })}
-                      placeholder="0"
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                  <div className="rounded-md border bg-muted/20 p-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <div className="text-xs font-semibold">Botga habar yuborish</div>
-                        <div className="text-[11px] text-muted-foreground">
-                          Agentga prixod va to'lov cheki yuboriladi
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={source.sendBotUpdate ? "default" : "outline"}
-                        onClick={() =>
-                          setSource({ ...source, sendBotUpdate: !source.sendBotUpdate })
-                        }
-                      >
-                        {source.sendBotUpdate ? "Yoqilgan" : "Yoqish"}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <Label className="mb-1 block text-xs">Izoh</Label>
-          <Input
-            value={source.note}
-            onChange={(e) => setSource({ ...source, note: e.target.value })}
-            placeholder="Ixtiyoriy izoh"
-            className="h-8 text-xs"
-          />
-        </div>
-
-        <div className="mt-auto rounded-lg border bg-muted/20 p-2.5">
-          <Button onClick={submit} className="h-8 w-full gap-2 text-xs">
+          <Button onClick={openConfirm} className="h-8 gap-2 text-xs">
             <Check className="h-4 w-4" />
             Tasdiqlash
           </Button>
         </div>
-      </section>
 
-      <section className="flex min-h-0 flex-col rounded-lg border bg-card shadow-sm xl:order-2">
-        <div className="flex items-center justify-between gap-3 border-b p-3">
-          <div className="text-sm font-semibold">Mahsulot qabul qilish</div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          <div className="mb-2 rounded-lg border bg-muted/20 px-3 py-2">
-            <div className="text-xs text-muted-foreground">
-              Qator ko'rinishida to'ldiring, ko'paysa pastga scroll bo'ladi.
-            </div>
-          </div>
-
-          <div className="overflow-auto">
-            <div className="min-w-[800px] space-y-2 pr-1">
-              {rows.map((row) => {
-                const tanInSom =
-                  (parseNumberInput(row.costPrice) || 0) * (MOCK_RATES[row.costCurrency] ?? 1);
-                const saleInSom = moneyInputToSom(row.price, row.costCurrency);
-                const wholesaleInSom = moneyInputToSom(row.wholesalePrice, row.costCurrency);
-                const productSuggestions = productSuggestionsFor(row);
-                return (
-                  <div
-                    key={row.id}
-                    className="w-max min-w-full rounded-lg border bg-muted/10 p-2.5 transition-colors"
-                  >
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-muted-foreground">
-                        Tovar #{rows.indexOf(row) + 1}
-                      </span>
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3">
+          <div className="space-y-3">
+            {rows.map((row, index) => {
+              const tanInSom =
+                (parseNumberInput(row.costPrice) || 0) * (MOCK_RATES[row.costCurrency] ?? 1);
+              const saleInSom = moneyInputToSom(row.price, row.costCurrency);
+              const wholesaleInSom = moneyInputToSom(row.wholesalePrice, row.costCurrency);
+              const productSuggestions = productSuggestionsFor(row);
+              return (
+                <div key={row.id} className="rounded-xl border bg-muted/10 p-2.5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="text-[11px] font-semibold text-muted-foreground">
+                        Tovar #{index + 1}
+                      </div>
+                      {row.existingProductId && (
+                        <div className="rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-semibold text-success">
+                          Bazadagi mahsulot tanlandi
+                        </div>
+                      )}
                     </div>
-
-                    <div className="grid grid-cols-[minmax(140px,1.15fr)_56px_76px_minmax(122px,0.95fr)_minmax(92px,0.75fr)_minmax(92px,0.75fr)_minmax(110px,0.65fr)_64px] gap-1.5">
-                      <Field label="Tovar nomi">
-                        <div className="relative">
-                          <Input
-                            value={row.name}
-                            onChange={(e) =>
-                              updateRow(row.id, {
-                                name: e.target.value,
-                                existingProductId: undefined,
-                              })
-                            }
-                            placeholder="Mahsulot nomini kiriting"
-                            className="h-7 text-xs"
-                          />
-                          {productSuggestions.length > 0 && !row.existingProductId && (
-                            <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-48 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-lg">
-                              {productSuggestions.map((product) => {
-                                const sourceInfo = latestProductSource(product.name);
-                                return (
-                                  <button
-                                    key={product.id}
-                                    type="button"
-                                    onClick={() => selectExistingProduct(row.id, product)}
-                                    className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
-                                  >
-                                    <div className="font-semibold">{product.name}</div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                      {formatSom(costInSom(product))}
-                                      {sourceInfo?.agentName ? ` · ${sourceInfo.agentName}` : ""}
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                        {row.existingProductId && (
-                          <div className="text-[10px] font-semibold text-success">
-                            Bazadagi mahsulot tanlandi, soni ustiga qo'shiladi
-                          </div>
-                        )}
-                      </Field>
-
-                      <Field label="Soni">
-                        <Input
-                          value={row.qty}
-                          onChange={(e) =>
-                            updateRow(row.id, { qty: formatNumberInput(e.target.value) })
-                          }
-                          placeholder="0"
-                          className="h-7 text-xs"
-                          inputMode="decimal"
-                        />
-                      </Field>
-
-                      <Field label="Birligi">
-                        <Input
-                          value={row.unit}
-                          onChange={(e) => updateRow(row.id, { unit: e.target.value })}
-                          placeholder="dona"
-                          className="h-7 text-xs"
-                        />
-                      </Field>
-
-                      <Field label="Tan narxi">
-                        <div className="space-y-1">
-                          <div className="grid grid-cols-[1fr_64px] gap-1.5">
-                            <Input
-                              value={row.costPrice}
-                              onChange={(e) =>
-                                updateRow(row.id, { costPrice: formatNumberInput(e.target.value) })
-                              }
-                              placeholder="0"
-                              className="h-7 text-xs"
-                              inputMode="decimal"
-                            />
-                            <Input
-                              value={row.costCurrency}
-                              onChange={(e) =>
-                                updateRow(row.id, {
-                                  costCurrency: (e.target.value.toUpperCase() || "UZS") as Currency,
-                                })
-                              }
-                              placeholder="UZS"
-                              className="h-7 text-xs uppercase"
-                            />
-                          </div>
-                          {row.costCurrency !== "UZS" && (
-                            <div className="text-[11px] text-muted-foreground">
-                              ≈ {formatSom(tanInSom)}
-                            </div>
-                          )}
-                        </div>
-                      </Field>
-
-                      <Field label="Sotuv narxi">
-                        <div className="space-y-1">
-                          <Input
-                            value={row.price}
-                            onChange={(e) =>
-                              updateRow(row.id, { price: formatNumberInput(e.target.value) })
-                            }
-                            placeholder={row.costCurrency}
-                            className="h-7 text-xs"
-                            inputMode="decimal"
-                          />
-                          <div className="px-1 text-[10px] text-muted-foreground">
-                            Oddiy mijoz · {row.costCurrency}
-                            {row.costCurrency !== "UZS" && row.price && (
-                              <span> · ≈ {formatSom(saleInSom)}</span>
-                            )}
-                          </div>
-                        </div>
-                      </Field>
-
-                      <Field label="Sotuv narxi">
-                        <div className="space-y-1">
-                          <Input
-                            value={row.wholesalePrice}
-                            onChange={(e) =>
-                              updateRow(row.id, {
-                                wholesalePrice: formatNumberInput(e.target.value),
-                              })
-                            }
-                            placeholder={row.costCurrency}
-                            className="h-7 text-xs"
-                            inputMode="decimal"
-                          />
-                          <div className="px-1 text-[10px] text-muted-foreground">
-                            Optom mijoz · {row.costCurrency}
-                            {row.costCurrency !== "UZS" && row.wholesalePrice && (
-                              <span> · ≈ {formatSom(wholesaleInSom)}</span>
-                            )}
-                          </div>
-                        </div>
-                      </Field>
-
-                      <Field label="Shtrix kod">
-                        <div className="flex gap-1">
-                          <Input
-                            value={row.barcode}
-                            onChange={(e) => updateRow(row.id, { barcode: e.target.value })}
-                            className="h-7 min-w-0 flex-1 text-xs"
-                          />
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-7 w-7 shrink-0"
-                            onClick={() => appendBarcodeSlot(row.id)}
-                            title="Yana bir barcode qo'shish"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-7 w-7 shrink-0"
-                            onClick={() => assignBarcode(row.id)}
-                            title="Avtomatik shtrix kod"
-                          >
-                            <Barcode className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </Field>
-
-                      <Field label="Amal">
-                        <div className="flex gap-1">
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-7 w-7"
-                            onClick={addRow}
-                          >
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-7 w-7 text-destructive hover:text-destructive"
-                            onClick={() => removeRow(row.id)}
-                            disabled={rows.length <= 1}
-                          >
-                            <Minus className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </Field>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-6 w-6"
+                        onClick={addRow}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-6 w-6 text-destructive hover:text-destructive"
+                        onClick={() => removeRow(row.id)}
+                        disabled={rows.length <= 1}
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+
+                  <div className="grid items-end gap-2 xl:grid-cols-[minmax(220px,2.2fr)_56px_72px_112px_112px_112px_128px_96px_minmax(160px,1.5fr)_72px]">
+                    <Field label="Tovar nomi">
+                      <div className="relative">
+                        <Input
+                          value={row.name}
+                          onChange={(e) =>
+                            updateRow(row.id, {
+                              name: e.target.value,
+                              existingProductId: undefined,
+                          })
+                          }
+                          placeholder="Mahsulot nomini kiriting"
+                          className="h-5 text-[9px]"
+                        />
+                        {productSuggestions.length > 0 && !row.existingProductId && (
+                          <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-44 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-lg">
+                            {productSuggestions.map((product) => {
+                              const sourceInfo = latestProductSource(product.name);
+                              return (
+                                <button
+                                  key={product.id}
+                                  type="button"
+                                  onClick={() => selectExistingProduct(row.id, product)}
+                                  className="w-full rounded px-2 py-0.5 text-left text-[9px] hover:bg-muted"
+                                >
+                                  <div className="font-semibold">{product.name}</div>
+                                  <div className="text-[10px] text-muted-foreground">
+                                    {formatSom(costInSom(product))}
+                                    {sourceInfo?.agentName ? ` · ${sourceInfo.agentName}` : ""}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </Field>
+
+                    <Field label="Soni">
+                      <Input
+                        value={row.qty}
+                        onChange={(e) => updateRow(row.id, { qty: formatNumberInput(e.target.value) })}
+                        placeholder="0"
+                        className="h-8 text-xs"
+                        inputMode="decimal"
+                      />
+                    </Field>
+
+                    <Field label="Birligi">
+                      <Select
+                        value={row.unit || settings.units[0] || "dona"}
+                        onValueChange={(value) => updateRow(row.id, { unit: value })}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {settings.units.map((unit) => (
+                            <SelectItem key={unit} value={unit}>
+                              {unit}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+
+                    <Field label="Tan narxi">
+                      <div className="grid grid-cols-[1fr_68px] gap-1">
+                        <Input
+                          value={row.costPrice}
+                          onChange={(e) =>
+                            updateRow(row.id, { costPrice: formatNumberInput(e.target.value) })
+                          }
+                          placeholder="0"
+                          className="h-8 text-xs"
+                          inputMode="decimal"
+                        />
+                        <Select
+                          value={row.costCurrency || settings.currencies[0] || "UZS"}
+                          onValueChange={(value) =>
+                            updateRow(row.id, { costCurrency: value as Currency })
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-xs uppercase">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {settings.currencies.map((currency) => (
+                              <SelectItem key={currency} value={currency}>
+                                {currency}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </Field>
+
+                    <Field label="Sotuv narxi">
+                      <Input
+                        value={row.price}
+                        onChange={(e) =>
+                          updateRow(row.id, { price: formatNumberInput(e.target.value) })
+                        }
+                        placeholder={row.costCurrency}
+                        className="h-8 text-xs"
+                        inputMode="decimal"
+                      />
+                    </Field>
+
+                    <Field label="Optom narxi">
+                      <Input
+                        value={row.wholesalePrice}
+                        onChange={(e) =>
+                          updateRow(row.id, {
+                            wholesalePrice: formatNumberInput(e.target.value),
+                          })
+                        }
+                        placeholder={row.costCurrency}
+                        className="h-8 text-xs"
+                        inputMode="decimal"
+                      />
+                    </Field>
+
+                    <Field label="Ombor">
+                      <Select
+                        value={row.warehouse || defaultWarehouse}
+                        onValueChange={(value) => updateRow(row.id, { warehouse: value })}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {settings.warehouses.map((w) => (
+                            <SelectItem key={w} value={w}>
+                              {w}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+
+                    <Field label="Polka raqami">
+                      <Select
+                        value={row.shelfLocation || "__empty__"}
+                        onValueChange={(value) =>
+                          updateRow(row.id, {
+                            shelfLocation: value === "__empty__" ? "" : value,
+                          })
+                        }
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Tanlang" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__empty__">Tanlanmagan</SelectItem>
+                          {settings.shelfLocations.map((loc) => (
+                            <SelectItem key={loc} value={loc}>
+                              {loc}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+
+                    <Field label="Shtrix kod">
+                      <div className="flex gap-1">
+                        <Input
+                          value={row.barcode}
+                          onChange={(e) => updateRow(row.id, { barcode: e.target.value })}
+                          className="h-5 min-w-0 flex-1 text-[9px]"
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="outline"
+                          className="h-5 w-5 shrink-0"
+                          onClick={() => appendBarcodeSlot(row.id)}
+                          title="Yana bir barcode qo'shish"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="outline"
+                          className="h-5 w-5 shrink-0"
+                          onClick={() => assignBarcode(row.id)}
+                          title="Avtomatik shtrix kod"
+                        >
+                          <Barcode className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </Field>
+
+                    <div className="flex items-end gap-1.5">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-7 w-7 shrink-0"
+                        onClick={addRow}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                        onClick={() => removeRow(row.id)}
+                        disabled={rows.length <= 1}
+                      >
+                        <Minus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
-    </div>
-  );
-}
 
-function SupplierSourcePanel({
-  value,
-  onChange,
-}: {
-  value: SupplierSource;
-  onChange: (next: SupplierSource) => void;
-}) {
-  const { t } = useApp();
-  const patch = (patch: Partial<SupplierSource>) => onChange({ ...value, ...patch });
-  return (
-    <div className="rounded-md border bg-muted/20 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div>
-          <div className="text-xs font-semibold">{t("source_details")}</div>
-          <div className="text-[11px] text-muted-foreground">
-            Bosilmasa tovar qayerdan kelgani yozilmaydi
-          </div>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant={value.enabled ? "default" : "outline"}
-          onClick={() =>
-            patch({ enabled: !value.enabled, agentId: value.agentId || makeAgentId() })
-          }
-          className="gap-2"
-        >
-          <Truck className="h-4 w-4" /> {value.enabled ? "Yoqilgan" : t("source_details")}
-        </Button>
-      </div>
-      {value.enabled && (
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <Label className="mb-1 block text-xs">{t("agent_id")}</Label>
-            <Input value={value.agentId} readOnly className="bg-muted font-semibold" />
-          </div>
-          <div>
-            <Label className="mb-1 block text-xs">{t("agent_name")}</Label>
-            <Input
-              value={value.agentName}
-              onChange={(e) => patch({ agentName: e.target.value })}
-              placeholder="Agent nomi"
-            />
-          </div>
-          <div>
-            <Label className="mb-1 block text-xs">{t("agent_phone")}</Label>
-            <Input
-              value={value.agentPhone}
-              onChange={(e) => patch({ agentPhone: e.target.value })}
-              placeholder="+998..."
-            />
-          </div>
-          <div>
-            <Label className="mb-1 block text-xs">{t("paid_now")}</Label>
-            <Input
-              type="number"
-              value={value.paidAmount}
-              onChange={(e) => patch({ paidAmount: e.target.value })}
-              placeholder="0"
-            />
-          </div>
-          <div>
-            <Label className="mb-1 block text-xs">{t("supplier_note")}</Label>
-            <Input
-              value={value.note}
-              onChange={(e) => patch({ note: e.target.value })}
-              placeholder="Izoh"
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Qabul ma'lumotlari</DialogTitle>
+          </DialogHeader>
 
-function KpiCard({
-  label,
-  value,
-  accent,
-  status,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-  status?: "ok" | "error";
-}) {
-  const className =
-    "rounded-lg border p-2 " +
-    (accent ? "border-primary/30 bg-primary/5 " : "bg-card ") +
-    (status === "ok" ? "border-success/40 bg-success/5 " : "") +
-    (status === "error" ? "border-destructive/40 bg-destructive/5 " : "");
+          <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-3 rounded-lg border bg-muted/10 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold">Agent tanlash</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Agent bo'lsa tanlang, bo'lmasa "hech qisi" holatida davom eting.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={!source.enabled ? "default" : "outline"}
+                  onClick={() =>
+                    setSource({
+                      enabled: false,
+                      agentId: makeAgentId(),
+                      agentName: "",
+                      agentPhone: "",
+                      paidAmount: "0",
+                      note: "",
+                      sendBotUpdate: true,
+                    })
+                  }
+                >
+                  Hech qisi
+                </Button>
+              </div>
 
-  return (
-    <div className={className}>
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div
-        className={
-          (accent ? "text-primary " : "") + "mt-1 truncate text-base font-bold tabular-nums"
-        }
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
+              <div>
+                <Label className="mb-1 block text-xs">Agentlar bazasi</Label>
+                <Select
+                  value={source.enabled ? source.agentId : "__none__"}
+                  onValueChange={(value) => {
+                    if (value === "__none__") {
+                      setSource({
+                        enabled: false,
+                        agentId: makeAgentId(),
+                        agentName: "",
+                        agentPhone: "",
+                        paidAmount: "0",
+                        note: "",
+                        sendBotUpdate: true,
+                      });
+                      return;
+                    }
+                    const agent = agents.find((item) => item.id === value);
+                    if (!agent) return;
+                    setSource((current) => ({
+                      ...current,
+                      enabled: true,
+                      agentId: agent.id,
+                      agentName: agent.name,
+                      agentPhone: agent.phone,
+                      sendBotUpdate: agent.botEnabled,
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Agent tanlang" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Hech qisi yo'q</SelectItem>
+                    {agents.map((agent) => (
+                      <SelectItem key={agent.id} value={agent.id}>
+                        {agent.name} · {agent.id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-function FieldCard({
-  title,
-  icon: Icon,
-  children,
-}: {
-  title: string;
-  icon?: React.ElementType;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-2 rounded-lg border bg-card p-2">
-      <div className="flex items-center gap-2">
-        {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
-        <Label className="text-sm font-semibold">{title}</Label>
-      </div>
-      {children}
+              {source.enabled && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Agent kodi</div>
+                    <div className="text-sm font-semibold">{source.agentId}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Agent ismi</div>
+                    <div className="text-sm font-semibold">{source.agentName || "-"}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Telefon</div>
+                    <div className="text-sm font-semibold">{source.agentPhone || "-"}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Hozir beriladi</div>
+                    <Input
+                      type="number"
+                      value={source.paidAmount}
+                      onChange={(e) => setSource({ ...source, paidAmount: e.target.value })}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {source.enabled && (
+                <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2">
+                  <Checkbox
+                    id="from-main-cashbox"
+                    checked={deductFromCashbox}
+                    onCheckedChange={(checked) => setDeductFromCashbox(checked === true)}
+                  />
+                  <Label htmlFor="from-main-cashbox" className="text-xs font-medium">
+                    Asosiy kassadan
+                  </Label>
+                  <span className="text-[11px] text-muted-foreground">
+                    Berilgan summa kassadan chiqadi
+                  </span>
+                </div>
+              )}
+
+              {source.enabled && selectedAgent && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Jami qarz</div>
+                    <div className="text-sm font-semibold">{formatSom(selectedAgent.totalAmount)}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">To'langan</div>
+                    <div className="text-sm font-semibold">{formatSom(selectedAgent.paidAmount)}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Qoldiq qarz</div>
+                    <div className="text-sm font-semibold">{formatSom(selectedAgent.remainingDebt)}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Bot holati</div>
+                    <div className="text-sm font-semibold">
+                      {selectedAgent.botEnabled ? "Yoqilgan" : "O'chirilgan"}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2 sm:col-span-2">
+                    <div className="text-[10px] uppercase text-muted-foreground">Telefon</div>
+                    <div className="text-sm font-semibold">{selectedAgent.phone || "-"}</div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label className="mb-1 block text-xs">Izoh</Label>
+                <Input
+                  value={source.note}
+                  onChange={(e) => setSource({ ...source, note: e.target.value })}
+                  placeholder="Ixtiyoriy izoh"
+                  className="h-8 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border bg-muted/10 p-3">
+              <div className="text-sm font-semibold">Qisqa jamlanma</div>
+              <div className="grid gap-2">
+                <div className="rounded-md border bg-card p-2">
+                  <div className="text-[10px] uppercase text-muted-foreground">Mahsulotlar</div>
+                  <div className="text-base font-bold">{validRows.length} ta qator</div>
+                </div>
+                <div className="rounded-md border bg-card p-2">
+                  <div className="text-[10px] uppercase text-muted-foreground">Jami tannarx</div>
+                  <div className="text-base font-bold">{formatSom(totalCostSom)}</div>
+                </div>
+                <div className="rounded-md border bg-card p-2">
+                  <div className="text-[10px] uppercase text-muted-foreground">Holat</div>
+                  <div className="text-sm font-medium">
+                    {source.enabled ? "Agent bilan qabul qilinadi" : "Agentsiz qabul qilinadi"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Bekor qilish
+            </Button>
+            <Button onClick={finalizeReceiving}>Qabul qilish</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1099,15 +949,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="space-y-1">
       <Label className="text-[11px] font-semibold text-muted-foreground">{label}</Label>
       {children}
-    </div>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-muted/20 p-2">
-      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold">{value}</div>
     </div>
   );
 }

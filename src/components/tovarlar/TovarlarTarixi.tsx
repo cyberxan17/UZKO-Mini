@@ -333,6 +333,7 @@ function ProductHistoryDetailDialog({
             <div className="grid gap-2 sm:grid-cols-2">
               <Info label="Miqdor" value={`${row.qty} ${row.unit}`} />
               <Info label="Ombor" value={row.warehouse} />
+              <Info label="Polka" value={row.shelfLocation || "-"} />
               <Info label="Sotuv narxi" value={formatSom(row.price)} />
               <Info label="Tan narx" value={formatSom(row.costPrice)} />
               <Info label="Jami tan narx" value={formatSom(row.qty * row.costPrice)} />

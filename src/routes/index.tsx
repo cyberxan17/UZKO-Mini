@@ -309,11 +309,11 @@ function SotuvchiPage() {
       />
 
       <Dialog open={returnOpen} onOpenChange={setReturnOpen}>
-        <DialogContent className="h-[92dvh] max-w-6xl overflow-hidden p-0">
+        <DialogContent className="h-[94dvh] max-w-7xl overflow-hidden p-0">
           <DialogHeader className="border-b px-4 py-3">
             <DialogTitle>Tovar qaytarish</DialogTitle>
           </DialogHeader>
-          <div className="h-[calc(92dvh-57px)] overflow-hidden">
+          <div className="h-[calc(94dvh-57px)] overflow-hidden">
             <TovarQaytarish
               exchangeShortcut
               onExchangeCreated={(nextReturn) => {

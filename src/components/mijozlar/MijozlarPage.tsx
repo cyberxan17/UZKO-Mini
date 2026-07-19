@@ -811,6 +811,9 @@ export function MijozlarPage() {
                       <div className="text-sm text-muted-foreground">{fmtDate(report.date)}</div>
                     </div>
                     <div className="text-right">
+                      <div className="text-xs text-muted-foreground">
+                        {report.type === "return" ? "Qaytarish" : "Prixod"}
+                      </div>
                       <div className="font-bold text-primary">{formatSom(report.totalAmount)}</div>
                       <div className="text-sm text-muted-foreground">
                         Qoldiq: {formatSom(report.remainingDebt)}
@@ -890,6 +893,10 @@ export function MijozlarPage() {
               <InfoRow label="Sana" value={fmtDate(selectedReceipt.receipt.date)} />
               <InfoRow label="Agent" value={selectedReceipt.receipt.agentName} />
               <InfoRow label="Agent ID" value={selectedReceipt.receipt.agentId} />
+              <InfoRow
+                label="Turi"
+                value={selectedReceipt.receipt.type === "return" ? "Tovar qaytarish" : "Prixod"}
+              />
               <InfoRow
                 label="Umumiy summa"
                 value={formatSom(selectedReceipt.receipt.totalAmount)}

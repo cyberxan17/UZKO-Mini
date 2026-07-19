@@ -13,15 +13,18 @@ export function ProductsBrowser({ onPick, priceMode = "retail" }: Props) {
 
   const products = React.useMemo(() => {
     const q = query.trim().toLowerCase();
+    const numericQuery = parseQueryNumber(query);
     return MOCK_PRODUCTS.filter((p) => {
       if (!q) return true;
-      return (
+      const matchesText =
         p.name.toLowerCase().includes(q) ||
         p.barcode.includes(q) ||
-        p.customCode.toLowerCase().includes(q)
-      );
+        p.customCode.toLowerCase().includes(q);
+      const matchesPrice =
+        numericQuery !== null && salePrice(p, priceMode) === numericQuery;
+      return matchesText || matchesPrice;
     });
-  }, [query]);
+  }, [query, priceMode]);
 
   React.useEffect(() => {
     setActiveIdx(0);
@@ -137,6 +140,13 @@ function salePrice(product: unknown, priceMode: PriceMode = "retail") {
     record.sotuvNarxi,
     record.narx,
   );
+}
+
+function parseQueryNumber(value: string) {
+  const cleaned = value.trim().replace(/\s/g, "").replace(/,/g, ".").replace(/[^0-9.-]/g, "");
+  if (!cleaned) return null;
+  const number = Number(cleaned);
+  return Number.isFinite(number) ? number : null;
 }
 
 function firstPositiveNumber(...values: unknown[]) {
